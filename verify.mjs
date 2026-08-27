@@ -233,7 +233,11 @@ async function checkReceipts(stats) {
   head("The receipts, against a Monero node");
   if (!DAEMON) {
     meh("no --daemon given, so nothing was checked against the chain");
-    console.log(`        run a node and pass it, or use one you already trust:`);
+    console.log(`        this is the half that does not depend on us, so it is worth`);
+    console.log(`        doing. Any Monero node works, including a public one from`);
+    console.log(`        your wallet's node list, and it only ever learns that`);
+    console.log(`        somebody is auditing this board:`);
+    console.log(``);
     console.log(`        node verify.mjs --daemon http://127.0.0.1:18081`);
     return;
   }

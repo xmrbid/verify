@@ -5,13 +5,37 @@ second one. It is a single file, it has no dependencies, and it does not ask
 xmrbid.lol to confirm anything xmrbid.lol said.
 
 ```
+git clone https://github.com/xmrbid/verify
+cd verify
 node verify.mjs
+```
+
+That checks the site against itself. To check it against Monero as well, point
+it at a node:
+
+```
 node verify.mjs --daemon http://127.0.0.1:18081
 ```
 
-The first command checks the site against itself. The second checks it against
-Monero, using whatever node you point it at. Node 18 or newer, because it uses
-`fetch`. Nothing else.
+Node 18 or newer, because it uses `fetch`. Nothing else. Read `verify.mjs`
+before running it; it is one file and that is the point of it being one file.
+
+## Which node
+
+Your own, if you run one. If you do not, any public Monero node works and the
+script never sends it anything private: `check_tx_proof` asks about
+transactions that are already published on this site, so the only thing a node
+learns is that somebody is auditing xmrbid.lol. Your wallet already has a node
+list, and any address from it can go after `--daemon`.
+
+Do not use a node this board runs. There is not much point asking us to confirm
+our own arithmetic, which is the entire idea here.
+
+If you only want to check one payment and would rather not use a terminal,
+every Monero wallet can do it. Feather and the official GUI both have a
+prove-and-check screen: paste the transaction id, the address and the signature
+from that payment's page on the site, and the wallet tells you what the chain
+says.
 
 ## What it checks
 
