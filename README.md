@@ -1,5 +1,7 @@
 # Checking xmrbid.lol
 
+The board this checks is at <https://xmrbid.lol>.
+
 A board that publishes its own numbers is a board with one witness. This is the
 second one. It is a single file, it has no dependencies, and it does not ask
 xmrbid.lol to confirm anything xmrbid.lol said.
@@ -104,5 +106,5 @@ anybody.
 ## If a check fails
 
 Say so publicly. That is the entire point of publishing this. The site's contact
-details are on xmrbid.lol/about, and a failing check posted somewhere we cannot
+details are on <https://xmrbid.lol/about>, and a failing check posted somewhere we cannot
 edit is worth more than one sent to us privately.
