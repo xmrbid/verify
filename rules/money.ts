@@ -19,9 +19,23 @@ export const PICO = 1_000_000_000_000n; // 1 XMR
  */
 export const MIN_BID = (PICO * 6n) / 100n; // 0.06 XMR
 /** Bids move in whole steps of this size. */
-export const BID_STEP = PICO / 1000n; // 0.001 XMR
-/** Taking #1 costs at least this much more than the current top bid. */
-export const TOP_MARGIN = PICO / 100n; // 0.01 XMR
+/**
+ * Bids move in whole steps of this size, and passing anybody costs one step.
+ *
+ * It was a tenth of this, with a separate and larger margin for taking first
+ * place. Two numbers for one question, and they disagreed on screen: the board
+ * offered to pass the leader for 0.061 in one place and asked 0.07 for the
+ * same position in another. Worse, the larger of the two was published on the
+ * rules page and enforced nowhere, so the board was quoting a price its own
+ * code would not have insisted on.
+ *
+ * One step settles both. At a thousandth a leader could be passed for a
+ * fraction of a per cent, which invites being passed back for another
+ * fraction, and a board where first place turns over for pennies is a board
+ * whose ordering means nothing. At a hundredth, passing somebody costs
+ * something, and there is one number to publish rather than two to reconcile.
+ */
+export const BID_STEP = PICO / 100n; // 0.01 XMR
 /**
  * There is no maximum bid. This is the guard that keeps a typo from
  * overflowing a BIGINT column, not a rule: piconero is stored as BIGINT, which
@@ -115,7 +129,7 @@ export function entryPrice(): bigint {
 /** What it costs to take #1 from a board whose current top bid is `top`. */
 export function priceToBeat(top: bigint): bigint {
   if (top <= 0n) return MIN_BID;
-  return roundUpToStep(top + TOP_MARGIN);
+  return roundUpToStep(top + BID_STEP);
 }
 
 export function assertValidBid(pico: bigint): void {

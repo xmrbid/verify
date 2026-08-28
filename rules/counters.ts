@@ -1,4 +1,5 @@
 import { query } from "./db.ts";
+import { firstThisWindow } from "./ratelimit.ts";
 
 /**
  * Event tallies.
@@ -105,10 +106,32 @@ function versionBucket(ua: string, browser: string): string | null {
 }
 
 /** Where a visitor came from, host only, bucketed. */
+/** A bare IPv4 or IPv6 literal, in the two forms a URL hostname can take. */
+function isAddressLiteral(host: string): boolean {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.startsWith("[");
+}
+
 function referrerBucket(referer: string, selfHost: string): string | null {
   try {
     const host = new URL(referer).hostname.toLowerCase().replace(/^www\./, "");
     if (!host || host === selfHost) return null;
+    /* An address is not a source.
+     *
+     * A referrer is the host of the page that linked, and when something
+     * reaches this board by its IP rather than its name, that address is what
+     * the browser writes in the header. It is almost always one of this site's
+     * own edge addresses, arriving from a scanner: it names nobody, it tells a
+     * listing nothing about where its clicks came from, and it is worthless as
+     * a figure.
+     *
+     * It is also the one string on a page of aggregates that reads as an IP
+     * log. This board's entire claim is that it keeps no record of who read
+     * what, and a column headed "Referrer" listing numbers that look like
+     * visitors argues against that in the place it is least affordable, even
+     * though not one of them is a visitor. Counted as direct, which is what
+     * "arrived without a page behind it" has always meant.
+     */
+    if (isAddressLiteral(host)) return null;
     return host.slice(0, 60);
   } catch {
     return null;
@@ -118,6 +141,37 @@ function referrerBucket(referer: string, selfHost: string): string | null {
 export function countView(headers: Headers): void {
   const ua = headers.get("user-agent") ?? "";
   const automated = isAutomated(ua);
+
+  /* Once per caller per window, not once per page load.
+   *
+   * A number that a reader can move by pressing refresh is not a measure of an
+   * audience, and it reads as theatre even when it is the most honest count
+   * there is. This is the nearest thing to telling people apart that costs
+   * nothing new: the same keyed HMAC of the address the rate limiter has
+   * always taken, under the same salt, rotated at the same hour, in the same
+   * memory, written nowhere. Nothing is stored that was not already stored,
+   * and it stops being linkable to an address at the same moment it already
+   * did.
+   *
+   * The window is an hour rather than a day on purpose. The figure this feeds
+   * says "in the last hour", so an hour makes it exactly what it claims to be:
+   * callers, not loads. A day-long window would mean a day-long salt, which is
+   * twenty-four times the period in which a memory dump could be tested
+   * against a guessed address, and the salt's short life is the whole
+   * guarantee. A deploy clears the memory either way, which an hourly window
+   * barely notices and a daily one would be wrong about for the rest of the
+   * day.
+   *
+   * Tor and I2P arrive with no address to fold, and they are counted every
+   * time. Over-counting the people who took the most trouble to be unreadable
+   * is the right way round.
+   */
+  const caller =
+    headers.get("cf-connecting-ip")?.trim() ||
+    headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    headers.get("x-real-ip") ||
+    "local";
+  if (!firstThisWindow(caller, "view")) return;
 
   // A crawler is not an audience, and a figure an advertiser is reading to
   // decide what a rank is worth must not have crawlers in it. They are still
@@ -283,13 +337,39 @@ export async function daysOfHistory(): Promise<number> {
 }
 
 /** Views in the last `minutes`, from the pulse table. */
+/**
+ * Held for a minute, deliberately.
+ *
+ * The figure was read on every render, so a reader who pressed refresh watched
+ * it climb by their own arrival. It was the truest number on the page and it
+ * looked like theatre, which is the worse outcome of the two: the board cannot
+ * tell one person refreshing from thirty people arriving, says so on /stats,
+ * and would have to start identifying readers to do better. It will not.
+ *
+ * So the number is still every arrival, counted the same way, and the page
+ * simply stops re-reading it on every paint. What that removes is the illusion
+ * that you moved it, not any part of the count.
+ */
+let pulseHeld: { at: number; minutes: number; n: number } | null = null;
+const PULSE_HOLD_MS = 60_000;
+
 export async function recentViews(minutes = 60): Promise<number> {
+  const now = Date.now();
+  if (
+    pulseHeld &&
+    pulseHeld.minutes === minutes &&
+    now - pulseHeld.at < PULSE_HOLD_MS
+  ) {
+    return pulseHeld.n;
+  }
   const rows = await query<{ n: string }>(
     `SELECT COALESCE(SUM(views), 0)::TEXT AS n FROM pulse
      WHERE bucket > NOW() - ($1 || ' minutes')::INTERVAL`,
     [String(minutes)],
   );
-  return Number(rows[0]?.n ?? 0);
+  const n = Number(rows[0]?.n ?? 0);
+  pulseHeld = { at: now, minutes, n };
+  return n;
 }
 
 export interface Slice {

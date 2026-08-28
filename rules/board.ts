@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { query, one } from "./db.ts";
 import type { ProfileLinks } from "./handle.ts";
 
@@ -186,6 +187,11 @@ export interface LadderStep {
   display: string;
   /** So a raise can drop its own listing out of the ladder it is climbing. */
   key: string;
+  /** The captured icon's address, or null when the monogram is drawn instead. */
+  icon: string | null;
+  /** The monogram's letter and its tint, worked out here so the client need not. */
+  initial: string;
+  tint: number;
 }
 
 /**
@@ -205,13 +211,30 @@ export async function getLadder(
     params.push(categorySlug);
     filter = `WHERE category_slug = $${params.length}`;
   }
-  const rows = await query<{ pico: string; display: string; key: string }>(
+  const rows = await query<{
+    pico: string;
+    display: string;
+    key: string;
+    id: string;
+    has_icon: boolean;
+  }>(
     `${boardCte(mode)}
-     SELECT amount_pico::TEXT AS pico, display, key FROM ranked ${filter}
+     SELECT amount_pico::TEXT AS pico, display, key, id, has_icon
+       FROM ranked ${filter}
      ORDER BY amount_pico DESC LIMIT $1`,
     params,
   );
-  return rows.map((r) => ({ pico: r.pico, display: r.display, key: r.key }));
+  return rows.map((r) => ({
+    pico: r.pico,
+    display: r.display,
+    key: r.key,
+    // The hero ladder runs in the browser and cannot call the server component
+    // that draws a mark, so the two things it needs are worked out here: the
+    // address of a captured icon, or the letter and tint the monogram uses.
+    icon: r.has_icon ? `/mark/${r.id}` : null,
+    initial: (/\p{L}|\p{N}/u.exec(`${r.display} ${r.key}`)?.[0] ?? "?").toUpperCase(),
+    tint: createHash("sha256").update(r.key).digest()[0] % 6,
+  }));
 }
 
 export async function getListing(key: string): Promise<BoardRow | null> {
@@ -387,9 +410,11 @@ export async function getActivity(limit = 6): Promise<ActivityItem[]> {
 
 export interface RankPrice {
   rank: number;
+  id: number;
   key: string;
   handle: string | null;
   display: string;
+  hasIcon: boolean;
   pico: bigint;
   clicks: number;
   /** Days the listing has been on the board, floored at 1. */
@@ -404,9 +429,11 @@ export interface RankPrice {
 export async function rankPrices(limit = 25): Promise<RankPrice[]> {
   const rows = await query<{
     pos: string;
+    id: string;
     key: string;
     handle: string | null;
     display: string;
+    has_icon: boolean;
     pico: string;
     n_clicks: string;
     days: string;
@@ -415,7 +442,7 @@ export async function rankPrices(limit = 25): Promise<RankPrice[]> {
     // table columns, so a bare `rank::TEXT` would sort 1, 10, 11, 2, this bit
     // twice before.
     `${boardCte("all-time")}
-     SELECT rank::TEXT AS pos, key, handle, display,
+     SELECT rank::TEXT AS pos, id, key, handle, display, has_icon,
             amount_pico::TEXT AS pico,
             clicks::TEXT AS n_clicks,
             GREATEST(1, EXTRACT(EPOCH FROM (NOW() - first_bid_at)) / 86400)::TEXT AS days
@@ -424,9 +451,11 @@ export async function rankPrices(limit = 25): Promise<RankPrice[]> {
   );
   return rows.map((r) => ({
     rank: Number(r.pos),
+    id: Number(r.id),
     key: r.key,
     handle: r.handle,
     display: r.display,
+    hasIcon: r.has_icon,
     pico: BigInt(r.pico),
     clicks: Number(r.n_clicks),
     daysLive: Math.max(1, Number(r.days)),

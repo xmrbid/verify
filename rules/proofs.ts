@@ -171,6 +171,10 @@ export interface LedgerRow {
   purpose: "bid" | "category";
   what: string;
   href: string | null;
+  /** The listing this bought, so the row can wear its face like the board. */
+  listingKey: string | null;
+  listingId: number | null;
+  hasIcon: boolean;
   /** Where that listing stands now, which is what the money was buying. */
   rank: number | null;
   categoryRank: number | null;
@@ -210,6 +214,8 @@ export async function ledger(limit = 50, offset = 0): Promise<{
       publish_proof: boolean;
       key: string | null;
       handle: string | null;
+      listing_id: string | null;
+      has_icon: boolean | null;
       rank: string | null;
       category_rank: string | null;
       category_name: string | null;
@@ -220,6 +226,7 @@ export async function ledger(limit = 50, offset = 0): Promise<{
       `SELECT i.id, i.purpose, i.display, i.paid_pico::TEXT AS paid_pico,
               i.settled_at, jsonb_array_length(i.proofs) > 0 AS proven,
               i.publish_proof, l.key, l.handle, c.name AS category_name,
+              l.id::TEXT AS listing_id, (l.icon IS NOT NULL) AS has_icon,
               r.rank::TEXT AS rank, r.category_rank::TEXT AS category_rank
          FROM invoices i
          LEFT JOIN payments p ON p.invoice_id = i.id
@@ -259,6 +266,9 @@ export async function ledger(limit = 50, offset = 0): Promise<{
             : r.key
               ? `/product/${encodeURIComponent(r.key)}`
               : null,
+      listingKey: r.key,
+      listingId: r.listing_id ? Number(r.listing_id) : null,
+      hasIcon: Boolean(r.has_icon),
       rank: r.rank ? Number(r.rank) : null,
       categoryRank: r.category_rank ? Number(r.category_rank) : null,
       categoryName: r.category_name,
