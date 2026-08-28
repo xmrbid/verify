@@ -3,7 +3,7 @@
  * Checks xmrbid.lol against itself, and against Monero.
  *
  *   node verify.mjs
- *   node verify.mjs --daemon http://127.0.0.1:18081
+ *   node verify.mjs --wallet http://127.0.0.1:18083/json_rpc
  *
  * Nothing here trusts the board. It reads two public files, recomputes every
  * hash by hand, adds the published rows up, and then asks a Monero node you
@@ -19,7 +19,7 @@
  *   - every piconero of rank on the board has a payment behind it, listing
  *     by listing
  *   - every receipt is a real Monero transaction that paid the stated amount
- *     to the stated address, according to a node that is not the board's
+ *     to the stated address, according to a wallet and a node you run
  *
  * What it cannot prove, and neither can anything else
  *   - that the board is not bidding on itself. No signature can: Monero
@@ -41,7 +41,15 @@ const arg = (name, fallback) => {
 };
 
 const SITE = arg("site", "https://xmrbid.lol").replace(/\/$/, "");
-const DAEMON = arg("daemon", null);
+/* A monero-wallet-rpc the reader runs, not a daemon and never ours.
+   check_tx_proof is a wallet method: a daemon does not have it and answers
+   "Method not found", which is what this asked for until the first real
+   payment was checked. The wallet needs no keys and no balance. It only has to
+   see the transaction, and it sees that through whichever node the reader
+   pointed it at. --daemon is still accepted, because that is what the first
+   version documented, and it says what to do instead. */
+const WALLET = arg("wallet", null);
+const MISDIRECTED = arg("daemon", null);
 const LIMIT = Number(arg("limit", "0")) || Infinity;
 
 const ok = (m) => console.log(`  \x1b[32mPASS\x1b[0m  ${m}`);
@@ -230,15 +238,30 @@ async function checkTotals() {
  * being a story.
  */
 async function checkReceipts(stats) {
-  head("The receipts, against a Monero node");
-  if (!DAEMON) {
-    meh("no --daemon given, so nothing was checked against the chain");
-    console.log(`        this is the half that does not depend on us, so it is worth`);
-    console.log(`        doing. Any Monero node works, including a public one from`);
-    console.log(`        your wallet's node list, and it only ever learns that`);
-    console.log(`        somebody is auditing this board:`);
+  head("The receipts, against Monero");
+  if (MISDIRECTED && !WALLET) {
+    fail("--daemon points at a node, and check_tx_proof is a wallet method");
+    console.log(`        A daemon answers "Method not found". Run a wallet against`);
+    console.log(`        your node and point this at the wallet instead. It needs no`);
+    console.log(`        keys and no balance: it only has to see the transaction.`);
     console.log(``);
-    console.log(`        node verify.mjs --daemon http://127.0.0.1:18081`);
+    console.log(`        monero-wallet-rpc --wallet-dir /tmp/check \\`);
+    console.log(`          --daemon-address ${MISDIRECTED.replace(/^https?:\/\//, "").replace(/\/.*$/, "")} \\`);
+    console.log(`          --rpc-bind-port 18083 --disable-rpc-login`);
+    console.log(`        node verify.mjs --wallet http://127.0.0.1:18083/json_rpc`);
+    return;
+  }
+  if (!WALLET) {
+    meh("no --wallet given, so nothing was checked against Monero");
+    console.log(`        This is the half that does not depend on us, so it is the`);
+    console.log(`        half worth doing. Run a wallet of your own against a node of`);
+    console.log(`        your own, or any public one. It holds no keys and no money:`);
+    console.log(`        check_tx_proof only needs to see the transaction.`);
+    console.log(``);
+    console.log(`        monero-wallet-rpc --wallet-dir /tmp/check \\`);
+    console.log(`          --daemon-address node.example:18081 \\`);
+    console.log(`          --rpc-bind-port 18083 --disable-rpc-login`);
+    console.log(`        node verify.mjs --wallet http://127.0.0.1:18083/json_rpc`);
     return;
   }
 
@@ -253,7 +276,7 @@ async function checkReceipts(stats) {
     for (const proof of p.proofs) {
       let body;
       try {
-        const res = await fetch(`${DAEMON.replace(/\/$/, "")}/json_rpc`, {
+        const res = await fetch(WALLET, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -270,17 +293,17 @@ async function checkReceipts(stats) {
         });
         body = await res.json();
       } catch (err) {
-        fail(`${p.invoice}: could not reach the node (${err.message})`);
+        fail(`${p.invoice}: could not reach the wallet (${err.message})`);
         continue;
       }
 
       if (body.error) {
-        fail(`${p.invoice}: the node refused the proof (${body.error.message})`);
+        fail(`${p.invoice}: the wallet refused the proof (${body.error.message})`);
         continue;
       }
       const r = body.result ?? {};
       if (!r.good) {
-        fail(`${p.invoice}: the node says the signature is not good`);
+        fail(`${p.invoice}: the signature is not good`);
         continue;
       }
       const received = BigInt(r.received ?? 0);
@@ -295,7 +318,7 @@ async function checkReceipts(stats) {
     }
   }
   if (checked > 0) {
-    ok(`${checked} receipt${checked === 1 ? "" : "s"} confirmed by the chain, amounts match`);
+    ok(`${checked} receipt${checked === 1 ? "" : "s"} confirmed against the chain, amounts match`);
   }
 }
 

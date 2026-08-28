@@ -275,24 +275,44 @@ class WalletRpc implements Wallet {
   }
 
   async received(index: number): Promise<Received> {
-    const r = await this.call<{
-      transfers?: {
-        /** A string when it was too long to be a safe number; see parseJson. */
-        amount: string | number;
-        confirmations?: number;
-        txid?: string;
-      }[];
-    }>("get_transfers", {
+    /*
+     * get_transfers answers with one array per kind, `in` and `pool` and
+     * `out`, and not with a single `transfers`. This read that key, which does
+     * not exist, so every call returned nothing: money would arrive, the
+     * watcher would see a payment of zero, and no invoice would ever settle.
+     * Somebody would have paid and watched their listing never appear.
+     *
+     * It survived a full end-to-end test because that test ran against the
+     * mock wallet, which answers from a table and never touches this code. The
+     * first real payment found it in a minute.
+     *
+     * `in` is what has landed in a block, `pool` is what is in the mempool and
+     * has no confirmations yet. Both count towards the amount, because the
+     * money is on its way either way; only the confirmation count decides
+     * whether it has arrived.
+     */
+    interface Entry {
+      /** A string when it was too long to be a safe number; see parseJson. */
+      amount: string | number;
+      confirmations?: number;
+      txid?: string;
+    }
+    const r = await this.call<{ in?: Entry[]; pool?: Entry[] }>("get_transfers", {
       in: true,
       pool: true,
       account_index: this.accountIndex,
       subaddr_indices: [index],
     });
+
+    const entries = [...(r.in ?? []), ...(r.pool ?? [])];
     let amountPico = 0n;
     let confirmations = Number.POSITIVE_INFINITY;
     const txids: string[] = [];
-    for (const t of r.transfers ?? []) {
+    for (const t of entries) {
       amountPico += BigInt(t.amount);
+      // A pool entry reports no confirmations, which is zero rather than
+      // unknown: it is the one that has not arrived, and taking the lowest
+      // means a second payment cannot confirm the first one on its behalf.
       confirmations = Math.min(confirmations, t.confirmations ?? 0);
       if (t.txid && !txids.includes(t.txid)) txids.push(t.txid);
     }

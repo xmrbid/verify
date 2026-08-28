@@ -18,6 +18,7 @@ import { launchGate } from "./launch.ts";
 import { readTicket } from "./tickets.ts";
 import { HandleError } from "./handle.ts";
 import { REQUIRED_CONFIRMATIONS, wallet } from "./monero.ts";
+import { announce } from "./indexnow.ts";
 import { captureIcon } from "./icon.ts";
 
 /** An unpaid invoice holds no rank, so it does not need to live long. */
@@ -388,6 +389,22 @@ export async function settleInvoice(id: string): Promise<boolean> {
     // Fire and forget: the rank is already claimed, and a site that is slow or
     // down just keeps its monogram.
     void captureIcon(Number(listingId), inv.icon_url ?? "").catch(() => {});
+
+    // The board just changed, so the engines that accept being told are told.
+    // Google is not among them and this is not a substitute for being crawled;
+    // it is what makes a new listing findable in Bing, and through Bing in
+    // DuckDuckGo, in minutes rather than whenever a crawler next passes.
+    const base = (process.env.SITE_URL ?? "").replace(/\/$/, "");
+    if (base) {
+      announce([
+        `${base}/`,
+        `${base}/today`,
+        `${base}/category/${inv.category_slug}`,
+        inv.handle
+          ? `${base}/@${inv.handle}`
+          : `${base}/product/${encodeURIComponent(inv.listing_key)}`,
+      ]);
+    }
     return true;
   });
 }

@@ -12,15 +12,30 @@ cd verify
 node verify.mjs
 ```
 
-That checks the site against itself. To check it against Monero as well, point
-it at a node:
+That checks the site against itself. The other half, the half that does not
+depend on this board at all, needs a Monero wallet of your own:
 
 ```
-node verify.mjs --daemon http://127.0.0.1:18081
+monero-wallet-rpc --wallet-dir /tmp/check \
+  --daemon-address node.example:18081 \
+  --rpc-bind-port 18083 --disable-rpc-login
+
+node verify.mjs --wallet http://127.0.0.1:18083/json_rpc
 ```
 
 Node 18 or newer, because it uses `fetch`. Nothing else. Read `verify.mjs`
 before running it; it is one file and that is the point of it being one file.
+
+## Why a wallet and not a node
+
+`check_tx_proof` is a wallet method. A daemon does not have it and answers
+"Method not found", which is what the first version of this script asked for
+and what the first real payment to this board caught within a minute.
+
+The wallet holds nothing. It has no keys, no funds and no history: give it a
+fresh directory and it will make an empty one. All it does is fetch the
+transaction from whichever node you pointed it at and check the signature
+against it. The node is where the independence lives, and it is yours.
 
 ## Which node
 
@@ -28,16 +43,16 @@ Your own, if you run one. If you do not, any public Monero node works and the
 script never sends it anything private: `check_tx_proof` asks about
 transactions that are already published on this site, so the only thing a node
 learns is that somebody is auditing xmrbid.lol. Your wallet already has a node
-list, and any address from it can go after `--daemon`.
+list, and any address from it can go after `--daemon-address`.
 
 Do not use a node this board runs. There is not much point asking us to confirm
 our own arithmetic, which is the entire idea here.
 
 If you only want to check one payment and would rather not use a terminal,
-every Monero wallet can do it. Feather and the official GUI both have a
-prove-and-check screen: paste the transaction id, the address and the signature
-from that payment's page on the site, and the wallet tells you what the chain
-says.
+every Monero wallet can do it without any of the above. Feather and the
+official GUI both have a prove-and-check screen: paste the transaction id, the
+address and the signature from that payment's page on the site, and the wallet
+tells you what the chain says.
 
 ## What it checks
 
@@ -54,9 +69,9 @@ payments is a rank that was granted rather than paid for. That is the failure
 this exists to make visible.
 
 **Every receipt, against the chain.** Each settled payment carries a Monero
-InProof. With `--daemon`, the script sends each one to `check_tx_proof` on your
-node and compares the amount the chain reports against the amount the board
-claims. This is the part the board cannot influence: if a payment were invented,
+InProof. With `--wallet`, the script sends each one to `check_tx_proof` on your
+wallet, which fetches the transaction from your node, and compares the amount
+the chain reports against the amount the board claims. This is the part the board cannot influence: if a payment were invented,
 this is where it stops being a story.
 
 **Clicks, for consistency only.** The count on the listings can never exceed the
