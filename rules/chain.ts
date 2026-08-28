@@ -34,19 +34,20 @@ export const GENESIS = "0".repeat(64);
 export const DAY_TIMEZONE = "Europe/Madrid";
 
 export interface Link {
-  day: string;
+  /** The moment these figures were true, ISO 8601 in UTC. */
+  at: string;
   payload: string;
   prevHash: string;
   hash: string;
 }
 
 /** Keys in a fixed order, no whitespace, the string is the thing being hashed. */
-function canonical(day: string, values: Record<string, string | number>): string {
+function canonical(at: string, values: Record<string, string | number>): string {
   const ordered = Object.keys(values)
     .sort()
     .map((k) => `${JSON.stringify(k)}:${JSON.stringify(values[k])}`)
     .join(",");
-  return `{"day":${JSON.stringify(day)},${ordered}}`;
+  return `{"at":${JSON.stringify(at)},${ordered}}`;
 }
 
 export function linkHash(prevHash: string, payload: string): string {
@@ -66,69 +67,84 @@ export function linkHash(prevHash: string, payload: string): string {
  */
 export const CHAIN_START_DAY = process.env.CHAIN_START_DAY ?? null;
 
+/** No more than one link an hour, which is what the sealer is run at. */
+const SEAL_EVERY_MS = 60 * 60 * 1000;
+
 /**
- * Seals every finished day that is not sealed yet, oldest first. Idempotent:
- * a day already in the chain is left exactly as it was.
+ * Seals the figures as they stand, at most once an hour.
+ *
+ * It used to be once a day, and a day is a long time to leave the current
+ * figures unsealed: until midnight they could be edited without breaking
+ * anything, and the numbers a bidder is reading are today's. An hour is a
+ * short enough window to be worth almost nothing to anybody thinking about it.
+ *
+ * The totals are cumulative rather than per period, and that is the important
+ * part. Two links give the figures for the stretch between them by
+ * subtraction, so nothing is lost, and it adds a check that costs nobody
+ * anything: a total can never go down. A link showing fewer views than the one
+ * before it is a forgery or a bug, and either is worth knowing.
+ *
+ * Cumulative also means these can only be written as time passes. A missed
+ * hour cannot be filled in afterwards, because nothing here records what the
+ * total was at three o'clock yesterday; that is what the chain is for. A gap
+ * means the sealer did not run, it is visible, and inventing a link to cover
+ * it would be the one thing this record must not do.
  */
-export async function sealPendingDays(): Promise<number> {
-  const pending = await query<{ day: string; views: string; clicks: string }>(
-    `SELECT to_char(d.day, 'YYYY-MM-DD') AS day,
-            COALESCE(SUM(c.value) FILTER (WHERE c.name = 'views'), 0)::TEXT  AS views,
-            COALESCE(SUM(c.value) FILTER (WHERE c.name = 'clicks'), 0)::TEXT AS clicks
-     FROM (SELECT DISTINCT day FROM daily_counters
-            WHERE day < CURRENT_DATE
-              AND ($1::DATE IS NULL OR day >= $1::DATE)) d
-     LEFT JOIN daily_counters c ON c.day = d.day
-     WHERE NOT EXISTS (SELECT 1 FROM stat_snapshots s WHERE s.day = d.day)
-     GROUP BY d.day
-     ORDER BY d.day ASC`,
+export async function sealNow(): Promise<number> {
+  if (CHAIN_START_DAY) {
+    const startsAt = Date.parse(`${CHAIN_START_DAY}T00:00:00Z`);
+    if (Number.isFinite(startsAt) && Date.now() < startsAt) return 0;
+  }
+
+  const head = await one<{ at: string; hash: string }>(
+    "SELECT at::TEXT AS at, hash FROM stat_snapshots ORDER BY at DESC LIMIT 1",
+  );
+  if (head && Date.now() - Date.parse(head.at) < SEAL_EVERY_MS) return 0;
+
+  const counters = await one<{ views: string; clicks: string }>(
+    `SELECT COALESCE(SUM(value) FILTER (WHERE name = 'views'), 0)::TEXT  AS views,
+            COALESCE(SUM(value) FILTER (WHERE name = 'clicks'), 0)::TEXT AS clicks
+       FROM daily_counters
+      WHERE ($1::DATE IS NULL OR day >= $1::DATE)`,
     [CHAIN_START_DAY],
   );
-  if (pending.length === 0) return 0;
-
   const board = await one<{ listings: string; paid: string }>(
     `SELECT COUNT(*) FILTER (WHERE total_pico > 0)::TEXT AS listings,
             COALESCE(SUM(total_pico), 0)::TEXT AS paid
-     FROM listings WHERE hidden = FALSE`,
+       FROM listings WHERE hidden = FALSE`,
   );
 
-  let sealed = 0;
-  for (const row of pending) {
-    const head = await one<{ hash: string }>(
-      "SELECT hash FROM stat_snapshots ORDER BY day DESC LIMIT 1",
-    );
-    const prevHash = head?.hash ?? GENESIS;
-    const payload = canonical(row.day, {
-      views: Number(row.views),
-      clicks: Number(row.clicks),
-      listings_at_seal: Number(board?.listings ?? 0),
-      paid_piconero_at_seal: board?.paid ?? "0",
-    });
-    const hash = linkHash(prevHash, payload);
-    const result = await query(
-      `INSERT INTO stat_snapshots (day, payload, prev_hash, hash)
-       VALUES ($1, $2, $3, $4) ON CONFLICT (day) DO NOTHING`,
-      [row.day, payload, prevHash, hash],
-    );
-    void result;
-    sealed++;
-  }
-  return sealed;
+  const at = new Date();
+  const payload = canonical(at.toISOString(), {
+    views: Number(counters?.views ?? 0),
+    clicks: Number(counters?.clicks ?? 0),
+    listings: Number(board?.listings ?? 0),
+    paid_piconero: board?.paid ?? "0",
+  });
+  const prevHash = head?.hash ?? GENESIS;
+  const hash = linkHash(prevHash, payload);
+
+  await query(
+    `INSERT INTO stat_snapshots (at, payload, prev_hash, hash)
+     VALUES ($1, $2, $3, $4) ON CONFLICT (at) DO NOTHING`,
+    [at.toISOString(), payload, prevHash, hash],
+  );
+  return 1;
 }
 
 export async function getChain(limit = 400): Promise<Link[]> {
   const rows = await query<{
-    day: string;
+    at: string;
     payload: string;
     prev_hash: string;
     hash: string;
   }>(
-    `SELECT to_char(day, 'YYYY-MM-DD') AS day, payload, prev_hash, hash
-     FROM stat_snapshots ORDER BY day ASC LIMIT $1`,
+    `SELECT at, payload, prev_hash, hash
+     FROM stat_snapshots ORDER BY at ASC LIMIT $1`,
     [limit],
   );
   return rows.map((r) => ({
-    day: r.day,
+    at: new Date(r.at).toISOString(),
     payload: r.payload,
     prevHash: r.prev_hash,
     hash: r.hash,
@@ -140,7 +156,7 @@ export function verify(links: Link[]): { ok: boolean; brokenAt: string | null } 
   let prev = GENESIS;
   for (const link of links) {
     if (link.prevHash !== prev || linkHash(prev, link.payload) !== link.hash) {
-      return { ok: false, brokenAt: link.day };
+      return { ok: false, brokenAt: link.at };
     }
     prev = link.hash;
   }

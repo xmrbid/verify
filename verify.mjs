@@ -14,8 +14,8 @@
  * No dependencies. Node 18 or newer, because it uses fetch.
  *
  * What it can prove
- *   - the hash chain over the daily figures is intact and ends where the board
- *     says it ends
+ *   - the hash chain over the figures is intact, ends where the board says it
+ *     ends, and never shows a running total going down
  *   - every piconero of rank on the board has a payment behind it, listing
  *     by listing
  *   - every receipt is a real Monero transaction that paid the stated amount
@@ -86,13 +86,13 @@ const linkHash = (prev, payload) =>
 const GENESIS = "0".repeat(64);
 
 async function checkChain() {
-  head("The chain over the daily figures");
+  head("The chain over the figures");
   const chain = await getJson("/stats/chain.json");
 
   if (chain.starts) {
-    console.log(`        record starts ${chain.starts}, ${chain.length} days sealed`);
+    console.log(`        record starts ${chain.starts}, ${chain.length} seals`);
   } else {
-    console.log(`        ${chain.length} days sealed`);
+    console.log(`        ${chain.length} seals`);
   }
 
   if (chain.length === 0) {
@@ -104,12 +104,12 @@ async function checkChain() {
   let broken = null;
   for (const link of chain.links) {
     if (link.prev_hash !== prev) {
-      broken = `${link.day}: prev_hash does not match the day before it`;
+      broken = `${link.at}: prev_hash does not match the link before it`;
       break;
     }
     const computed = linkHash(prev, link.payload);
     if (computed !== link.hash) {
-      broken = `${link.day}: recomputed ${computed.slice(0, 16)}…, published ${link.hash.slice(0, 16)}…`;
+      broken = `${link.at}: recomputed ${computed.slice(0, 16)}…, published ${link.hash.slice(0, 16)}…`;
       break;
     }
     prev = link.hash;
@@ -124,17 +124,41 @@ async function checkChain() {
     ok(`the head is the last link: ${chain.head.slice(0, 16)}…`);
   }
 
-  // Days should be consecutive. A gap is not proof of anything, but it is the
-  // shape a removed day leaves and it should be said out loud.
-  const days = chain.links.map((l) => l.day);
-  const gaps = [];
-  for (let i = 1; i < days.length; i++) {
-    const a = Date.parse(`${days[i - 1]}T00:00:00Z`);
-    const b = Date.parse(`${days[i]}T00:00:00Z`);
-    const span = Math.round((b - a) / 86400000);
-    if (span !== 1) gaps.push(`${days[i - 1]} to ${days[i]}`);
+  /* The figures in a link are cumulative, so they can never fall. A total that
+     goes down is a forgery or a bug, and it costs nothing to look. */
+  let fell = null;
+  let prevFigures = null;
+  for (const link of chain.links) {
+    let f;
+    try { f = JSON.parse(link.payload); } catch { continue; }
+    if (prevFigures) {
+      for (const k of ["views", "clicks", "listings"]) {
+        if (Number(f[k]) < Number(prevFigures[k])) {
+          fell = `${k} went from ${prevFigures[k]} to ${f[k]} at ${link.at}`;
+          break;
+        }
+      }
+      if (BigInt(f.paid_piconero ?? 0) < BigInt(prevFigures.paid_piconero ?? 0)) {
+        fell = `paid went down at ${link.at}`;
+      }
+    }
+    if (fell) break;
+    prevFigures = f;
   }
-  if (gaps.length) console.log(`        gaps in the days sealed: ${gaps.join(", ")}`);
+  if (fell) fail(`a running total fell: ${fell}`);
+  else if (chain.links.length > 1) ok("no running total ever falls");
+
+  // Seals should be about an hour apart. A gap is not proof of anything, but
+  // it is the shape a removed link leaves and it should be said out loud.
+  const times = chain.links.map((l) => Date.parse(l.at));
+  const gaps = [];
+  for (let i = 1; i < times.length; i++) {
+    const hours = (times[i] - times[i - 1]) / 3600000;
+    if (hours > 1.5) gaps.push(`${chain.links[i - 1].at} to ${chain.links[i].at}`);
+  }
+  if (gaps.length) {
+    console.log(`        ${gaps.length} gap${gaps.length === 1 ? "" : "s"} longer than an hour between seals`);
+  }
 
   return chain;
 }
