@@ -26,6 +26,46 @@ node verify.mjs --wallet http://127.0.0.1:18083/json_rpc
 Node 18 or newer, because it uses `fetch`. Nothing else. Read `verify.mjs`
 before running it; it is one file and that is the point of it being one file.
 
+## Checking this file first
+
+This is the file you are about to run in order to check somebody else's
+arithmetic, so it is the one file here whose provenance is worth establishing
+before anything else. A substituted copy would confirm whatever it was written
+to confirm, and it would do it convincingly.
+
+It carries a detached signature, made with the key the board publishes at
+<https://xmrbid.lol/pgp/contact.asc>:
+
+```
+0750 2087 186C 2EC7 CC19  FE98 9047 E219 B3B6 6E35
+```
+
+```
+curl -sO https://xmrbid.lol/pgp/contact.asc
+gpg --import contact.asc
+gpg --verify verify.mjs.asc verify.mjs
+```
+
+Releases are tagged and the tags are signed with the same key, so a whole
+snapshot can be checked rather than a single file:
+
+```
+git verify-tag v1
+```
+
+GitHub's own "Verified" badge is deliberately not what any of this rests on. It
+means a key GitHub holds matched a commit GitHub stored, checked by GitHub and
+shown to you by GitHub. That is a reasonable thing for GitHub to offer and a
+poor thing for this repository to depend on, because the whole argument here is
+that a second witness should not need the first one's permission. The signature
+above is checkable with the key from the board itself, with no account
+anywhere, and it stays checkable if this repository is taken down, moved, or
+replaced.
+
+What it proves is narrow and worth saying plainly: that this file is the one
+the operator signed. It says nothing about whether the file is correct. Read
+it; it is one file for that reason.
+
 ## Why a wallet and not a node
 
 `check_tx_proof` is a wallet method. A daemon does not have it and answers
