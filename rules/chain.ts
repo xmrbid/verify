@@ -89,6 +89,16 @@ const SEAL_EVERY_MS = 60 * 60 * 1000;
  * total was at three o'clock yesterday; that is what the chain is for. A gap
  * means the sealer did not run, it is visible, and inventing a link to cover
  * it would be the one thing this record must not do.
+ *
+ * Two of these can run at once, and did: every stats page and every seal cron
+ * calls this, so on 29 August 2026 two requests forty milliseconds apart read
+ * the same head, both found it an hour old, and both wrote a link claiming it
+ * as their parent. Neither figure was wrong and every hash was its own honest
+ * hash, but a link with two children is not a chain, and the verifier said so
+ * on the page for a day. The gap between reading the head and writing the
+ * child cannot be closed in this process, so it is closed in the database:
+ * `prev_hash` is UNIQUE, a second child of the same parent cannot be stored,
+ * and the request that loses writes nothing and says so.
  */
 export async function sealNow(): Promise<number> {
   if (CHAIN_START_DAY) {
@@ -124,12 +134,15 @@ export async function sealNow(): Promise<number> {
   const prevHash = head?.hash ?? GENESIS;
   const hash = linkHash(prevHash, payload);
 
-  await query(
+  // Untargeted, because either unique is a reason to drop this link: `at` if
+  // the same instant was somehow sealed twice, `prev_hash` if somebody else
+  // sealed this head first. RETURNING tells the caller which happened.
+  const written = await query<{ ok: number }>(
     `INSERT INTO stat_snapshots (at, payload, prev_hash, hash)
-     VALUES ($1, $2, $3, $4) ON CONFLICT (at) DO NOTHING`,
+     VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING RETURNING 1 AS ok`,
     [at.toISOString(), payload, prevHash, hash],
   );
-  return 1;
+  return written.length;
 }
 
 export async function getChain(limit = 400): Promise<Link[]> {
